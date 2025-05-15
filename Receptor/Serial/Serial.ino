@@ -8,7 +8,13 @@
 
 // Calcula bit de paridade - Par ou impar
 bool bitParidade(char dado){
-
+  int ones = 0;
+  for(int i = 0; i < 8; i++) {
+    if ((dado >> i) & 1) {
+      ones++;
+    }
+  }
+  return ones % 2 == 0;
 }
 
 // Rotina de interrupcao do timer1
@@ -26,13 +32,12 @@ void setup(){
   // Inicializa TX ou RX
   //>>>> Codigo Aqui <<<<
   // Configura timer
-  configuraTemporizador(1)
-  iniciaTemporizador()
+  configuraTemporizador(BAUD_RATE);
   // habilita interrupcoes
   interrupts();
 }
 
 // O loop() eh executado continuamente (como um while(true))
 void loop ( ) {
-  //>>>> Codigo Aqui <<<<
+  
 }
