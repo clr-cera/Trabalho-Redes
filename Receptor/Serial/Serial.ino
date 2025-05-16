@@ -1,4 +1,4 @@
-
+//RECEPTOR
 #define PINO_RX 13
 #define PINO_TX 13
 #define BAUD_RATE 1
@@ -61,7 +61,7 @@ void loop ( ) {
     bool ERRO = false;
 
     Serial.println("ENTRAMOS NO LOOP");
-    for(int i = 0; i++; i < 11) {
+    for(int i = 0; i < 11; i++) {
 
       
 
