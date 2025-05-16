@@ -10,6 +10,8 @@
 
 #include "Temporizador.h"
 
+bool clock_state = false;
+
 // Calcula bit de paridade - Par ou impar
 bool bitParidade(char dado){
   int ones = 0;
@@ -18,16 +20,21 @@ bool bitParidade(char dado){
       ones++;
     }
   }
-  return ones % 2 == 0;
+  return ones % 2 == 1;
 }
 
 // Switch clock
 ISR(TIMER1_COMPA_vect){
-  if (bitRead(PORTD, PINO_CLOCK) == HIGH) {
+  Serial.println("Clock switch");
+  if (clock_state) {
+    Serial.println("To low");
     digitalWrite(PINO_CLOCK, LOW);
+    clock_state = false;
   }
   else {
+    Serial.println("To High");
     digitalWrite(PINO_CLOCK, HIGH);
+    clock_state = true;
   }
 }
 
@@ -42,6 +49,7 @@ void setup(){
   digitalWrite(PINO_RTX, LOW);
   digitalWrite(PINO_CLOCK, LOW);
   digitalWrite(PINO_TX, LOW);
+  clock_state = false;
 
   //desabilita interrupcoes
   noInterrupts();
@@ -59,6 +67,7 @@ void loop ( ) {
   if (Serial.available() > 0) {
     // Define os dados
     char incomingByte = Serial.read();
+    Serial.print(incomingByte);
     bool parity = bitParidade(incomingByte);
 
     // Inicia o RTX
@@ -73,12 +82,15 @@ void loop ( ) {
 
     for(int i = -1; i < 11; i++){
       // Checa por descidas no CLOCK
-      while(bitRead(PORTD, PINO_CLOCK) == LOW) {;}
-      while(bitRead(PORTD, PINO_CLOCK) == HIGH) {;}
+      Serial.println("Inicio espera clock");
+      while(!clock_state) {;}
+      while(clock_state) {;}
+      Serial.println("Descida clock");
 
       // Start bit
       if (i == -1) {
         digitalWrite(PINO_TX, HIGH);
+        Serial.println("Start bit");
       }
 
       // Write data
@@ -90,6 +102,7 @@ void loop ( ) {
         else  {
           digitalWrite(PINO_TX, LOW);
         }
+        Serial.println("Sent bit");
       }
 
       // Write parity
@@ -100,13 +113,16 @@ void loop ( ) {
         else  {
           digitalWrite(PINO_TX, LOW);
         }
+        Serial.println("Wrote Parity");
       }
 
       // Write end bit
       else if (i == 9){
         digitalWrite(PINO_TX, HIGH);
+        Serial.println("End bit");
       }
     }
+    Serial.println("End for");
 
     // Fecha o TX, RTX e para o CLOCK
     
@@ -114,5 +130,6 @@ void loop ( ) {
     digitalWrite(PINO_RTX, LOW);
     paraTemporizador();
     digitalWrite(PINO_RTX, LOW);
+    Serial.println("End transmission");
   }  
 }
