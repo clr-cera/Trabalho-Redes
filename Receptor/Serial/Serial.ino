@@ -77,9 +77,13 @@ void loop ( ) {
         //Verifica o bit alto para inciar recebimento
         if(bit != true)
           i--;
-      } else if (i < 9){
-        //Escreve o bit recebito no byte
-        incomingByte = (incomingByte << 1) | bit;
+      } else if (i >= 1 && i <= 8) {
+        // Escreve no byte
+        if (bit) {
+          bitSet(incomingByte, i - 1);
+        } else {
+          bitClear(incomingByte, i - 1);
+        }
       } else if (i == 9){
         //Verifica o bit de paridade
         if(bitParidade(incomingByte) != bit){
@@ -94,9 +98,6 @@ void loop ( ) {
           Serial.println("Falha de sincronismo");
         }
       }
-
-      
-      
       if(digitalRead(PINO_RTX) == LOW) break;
     }
     while(digitalRead(PINO_RTX) == HIGH) {;}
