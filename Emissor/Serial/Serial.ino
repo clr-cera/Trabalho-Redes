@@ -10,7 +10,21 @@
 
 #include "Temporizador.h"
 
-bool clock_state = false;
+volatile bool clock_state;
+
+void serial_flush(void) {
+ while (true) {
+   delay (20);  // give data a chance to arrive
+   if (Serial.available ()) {
+     // we received something, get all of it and discard it
+     while (Serial.available ())
+       Serial.read ();
+     continue;  // stay in the main loop
+    }
+  else
+    break;  // nothing arrived for 20 ms
+  }
+}
 
 // Calcula bit de paridade - Par ou impar
 bool bitParidade(char dado){
@@ -25,14 +39,11 @@ bool bitParidade(char dado){
 
 // Switch clock
 ISR(TIMER1_COMPA_vect){
-  Serial.println("Clock switch");
   if (clock_state) {
-    Serial.println("To low");
     digitalWrite(PINO_CLOCK, LOW);
     clock_state = false;
   }
   else {
-    Serial.println("To High");
     digitalWrite(PINO_CLOCK, HIGH);
     clock_state = true;
   }
@@ -76,6 +87,7 @@ void loop ( ) {
     // Espera o CTS
     while(digitalRead(PINO_CTS) == LOW) {;}
     
+    delayMicroseconds(HALF_BAUD);
     // Inicia o Clock
     iniciaTemporizador();
     
@@ -83,14 +95,21 @@ void loop ( ) {
     for(int i = -1; i < 11; i++){
       // Checa por descidas no CLOCK
       Serial.println("Inicio espera clock");
-      while(!clock_state) {;}
-      while(clock_state) {;}
+      
+      while(clock_state == false) {
+        continue;
+      }
+      while(clock_state == true) {
+        continue;
+      }
+
       Serial.println("Descida clock");
 
       // Start bit
       if (i == -1) {
         digitalWrite(PINO_TX, HIGH);
         Serial.println("Start bit");
+        Serial.println(1);
       }
 
       // Write data
@@ -98,9 +117,11 @@ void loop ( ) {
         bool bit = (incomingByte >> i) & 1;
         if (bit) {
           digitalWrite(PINO_TX, HIGH);
+          Serial.println(1);
         }
         else  {
           digitalWrite(PINO_TX, LOW);
+          Serial.println(0);
         }
         Serial.println("Sent bit");
       }
@@ -109,9 +130,11 @@ void loop ( ) {
       else if (i == 8) {
         if (parity) {
           digitalWrite(PINO_TX, HIGH);
+          Serial.println(1);
         }
         else  {
           digitalWrite(PINO_TX, LOW);
+          Serial.println(0);
         }
         Serial.println("Wrote Parity");
       }
@@ -120,6 +143,7 @@ void loop ( ) {
       else if (i == 9){
         digitalWrite(PINO_TX, HIGH);
         Serial.println("End bit");
+        Serial.println(1);
       }
     }
     Serial.println("End for");
@@ -131,5 +155,6 @@ void loop ( ) {
     paraTemporizador();
     digitalWrite(PINO_RTX, LOW);
     Serial.println("End transmission");
+    serial_flush();
   }  
 }
