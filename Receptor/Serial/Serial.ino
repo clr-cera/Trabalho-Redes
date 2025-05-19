@@ -53,14 +53,13 @@ void setup(){
 // O loop() eh executado continuamente (como um while(true))
 void loop ( ) {
   if (digitalRead(PINO_RTX) == HIGH){
-    Serial.println("RTX Subiu");
+    Serial.println("Subida do RTX detectada");
     digitalWrite(PINO_CTS, HIGH);
-    Serial.println("CTS Subiu");
     char incomingByte = 0;
     //FLAG DE ERRO
     bool ERRO = false;
 
-    Serial.println("ENTRAMOS NO LOOP");
+    Serial.println("Recebimento iniciado");
     for(int i = 0; i < 11; i++) {
 
       
@@ -68,7 +67,7 @@ void loop ( ) {
       //Espera uma borda de subida
       while(digitalRead(PINO_CLOCK) == HIGH) {;}
       while(digitalRead(PINO_CLOCK) == LOW) {;}
-      Serial.println("BORDA DE SUBIDA");
+      Serial.println("Próximo bit");
 
       bool bit = digitalRead(PINO_TX) == HIGH;
       Serial.println(bit);
@@ -92,7 +91,7 @@ void loop ( ) {
         }
       } else if (i == 10){
         if(bit == true && ERRO == false){
-          Serial.println("Baboseira ou ganhamo:");
+          Serial.println("Caracter lido:");
           Serial.println(incomingByte);
         } else {
           Serial.println("Falha de sincronismo");
