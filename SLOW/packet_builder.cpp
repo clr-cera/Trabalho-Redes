@@ -1,6 +1,17 @@
 //This can be altered, split and organized into multiple files in the future
 
 #include <bits/stdc++.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+/*
+
+FUNÇÕES AUXILIARES
+
+*/
 
 // Função auxiliar para inserir um valor de 32 bits em um vetor de bytes little endian
 void insert_uint32(std::vector<uint8_t>& vetor, uint32_t valor) {
@@ -19,9 +30,15 @@ void insert_bytes(std::vector<uint8_t>& vec, const std::vector<uint8_t>& bytes) 
     vec.insert(vec.end(), bytes.begin(), bytes.end());
 }
 
+/*
+
+CONSTRUTOR E DESTRUTOR DO PACOTE
+
+*/
+
 //Struct do pacote SLOW
 struct slow_packet{
-    const std::vector<uint8_t> sid;
+    std::vector<uint8_t> sid;
     uint32_t sttl;
     
     //Flags
@@ -73,6 +90,7 @@ uint32_t build_flags_and_sttl(Slow_packet packet) {
     // Retorna o sttl e as flags combinados
     return sttl_and_flags;
 }
+
 //Função para transformar um pacote SLOW em um vetor de bytes para ser transmitido
 std::vector<uint8_t> build_slow_packet(Slow_packet packet) {
     
@@ -106,4 +124,89 @@ std::vector<uint8_t> validate_and_build_slow_packet(Slow_packet packet) {
     validate_slow_packet(packet);
 
     return build_slow_packet(packet);
+}
+
+// Função para imprimir o conteúdo do pacote recebido (para depuração)
+void print_slow_packet(const slow_packet* packet) {
+    std::cout << "SID: ";
+    for (const auto& byte : packet->sid) {
+        std::cout << std::hex << static_cast<int>(byte) << " ";
+    }
+    std::cout << "\nSTTL: " << packet->sttl
+              << "\nConnect: " << packet->connect
+              << "\nRevive: " << packet->revive
+              << "\nAck: " << packet->ack
+              << "\nAccept: " << packet->accept
+              << "\nMore: " << packet->more
+              << "\nSeqnum: " << packet->seqnum
+              << "\nAcknum: " << packet->acknum
+              << "\nWindow: " << packet->window
+              << "\nFID: " << static_cast<int>(packet->fid)
+              << "\nFO: " << static_cast<int>(packet->fo)
+              << "\nData size: " << packet->data.size() 
+              << std::endl;
+}
+
+//Função para transformar um vetor de bytes em um pacote SLOW
+slow_packet parse_slow_packet(const std::vector<uint8_t>& data) {
+    constexpr size_t HEADER = 16 + 4 + 4 + 4 + 2 + 1 + 1;
+    if (data.size() < HEADER) {
+        throw std::invalid_argument("Dados insuficientes para construir um pacote SLOW");
+    }
+
+    // Funções auxiliares para ler valores de 32 e 16 bits little endian
+    auto read_u32 = [&](size_t p){
+        return  uint32_t(data[p]) 
+              | (uint32_t(data[p+1]) << 8)
+              | (uint32_t(data[p+2]) << 16)
+              | (uint32_t(data[p+3]) << 24);
+    };
+    auto read_u16 = [&](size_t p){
+        return  uint16_t(data[p]) 
+              | (uint16_t(data[p+1]) << 8);
+    };
+
+    // 1) SID
+    std::vector<uint8_t> sid(data.begin(), data.begin()+16);
+
+    // 2) STTL + flags
+    uint32_t sf = read_u32(16);
+    uint32_t sttl  = sf & 0x07FFFFFF;
+    uint8_t  flags = (sf >> 27) & 0x1F;
+
+    bool c = flags & 0x01;
+    bool r = flags & 0x02;
+    bool a = flags & 0x04;
+    bool ac= flags & 0x08;
+    bool m = flags & 0x10;
+
+    // 3) seq/ack
+    uint32_t seq   = read_u32(20);
+    uint32_t ack   = read_u32(24);
+
+    // 4) window, fid, fo
+    uint16_t win   = read_u16(28);
+    uint8_t  fid   = data[30];
+    uint8_t  fo    = data[31];
+
+    // 5) payload
+    std::vector<uint8_t> payload(data.begin()+32, data.end());
+
+    // Constroe e retorna o pacote SLOW
+    slow_packet pkt;
+    pkt.sid     = std::move(sid);
+    pkt.sttl    = sttl;
+    pkt.connect = c;
+    pkt.revive  = r;
+    pkt.ack     = a;
+    pkt.accept  = ac;
+    pkt.more    = m;
+    pkt.seqnum  = seq;
+    pkt.acknum  = ack;
+    pkt.window  = win;
+    pkt.fid     = fid;
+    pkt.fo      = fo;
+    pkt.data    = std::move(payload);
+
+    return pkt;
 }
