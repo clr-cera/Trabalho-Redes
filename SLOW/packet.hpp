@@ -1,5 +1,3 @@
-//This can be altered, split and organized into multiple files in the future
-
 #include <bits/stdc++.h>
 
 class slow_packet {
