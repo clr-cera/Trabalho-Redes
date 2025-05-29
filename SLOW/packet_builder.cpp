@@ -1,212 +1,183 @@
 //This can be altered, split and organized into multiple files in the future
 
 #include <bits/stdc++.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 
-/*
+class slow_packet {
+public:
 
-FUNÇÕES AUXILIARES
-
-*/
-
-// Função auxiliar para inserir um valor de 32 bits em um vetor de bytes little endian
-void insert_uint32(std::vector<uint8_t>& vetor, uint32_t valor) {
-    vetor.push_back(uint8_t( valor        & 0xFF));
-    vetor.push_back(uint8_t((valor >> 8 ) & 0xFF));
-    vetor.push_back(uint8_t((valor >> 16) & 0xFF));
-    vetor.push_back(uint8_t((valor >> 24) & 0xFF));
-}
-// Função auxiliar para inserir um valor de 16 bits em um vetor de bytes little endian
-void insert_uint16(std::vector<uint8_t>& vec, uint16_t value) {
-    vec.push_back(static_cast<uint8_t>(value));
-    vec.push_back(static_cast<uint8_t>(value >> 8));
-}
-// Função auxiliar para inserir um vetor de bytes em um outro vetor de bytes
-void insert_bytes(std::vector<uint8_t>& vec, const std::vector<uint8_t>& bytes) {
-    vec.insert(vec.end(), bytes.begin(), bytes.end());
-}
-
-/*
-
-CONSTRUTOR E DESTRUTOR DO PACOTE
-
-*/
-
-//Struct do pacote SLOW
-struct slow_packet{
+    // --- Dados da classe ---
     std::vector<uint8_t> sid;
-    uint32_t sttl;
-    
-    //Flags
-    bool connect;
-    bool revive;
-    bool ack;
-    bool accept;
-    bool more;
-
-    uint32_t seqnum;
-    uint32_t acknum;
-
-    uint16_t window;
-    uint8_t fid;
-    uint8_t fo;
-
+    uint32_t             sttl;
+    bool                 connect;
+    bool                 revive;
+    bool                 ack;
+    bool                 accept;
+    bool                 more;
+    uint32_t             seqnum;
+    uint32_t             acknum;
+    uint16_t             window;
+    uint8_t              fid;
+    uint8_t              fo;
     std::vector<uint8_t> data;
 
+    // --- Construtores ---
+
+    //Construtor padrão
+    slow_packet()
+        : sid(16, 0), sttl(0),
+          connect(false), revive(false), ack(false), accept(false), more(false),
+          seqnum(0), acknum(0), window(0), fid(0), fo(0), data()
+    {}
+
+    //Construtor explícito
+    slow_packet(const std::vector<uint8_t>& sid_,
+                uint32_t sttl_,
+                bool connect_, bool revive_, bool ack_, bool accept_, bool more_,
+                uint32_t seqnum_, uint32_t acknum_,
+                uint16_t window_, uint8_t fid_, uint8_t fo_,
+                const std::vector<uint8_t>& data_)
+        : sid(sid_), sttl(sttl_),
+          connect(connect_), revive(revive_), ack(ack_), accept(accept_), more(more_),
+          seqnum(seqnum_), acknum(acknum_), window(window_), fid(fid_), fo(fo_), data(data_)
+    {}
+
+    // --- Interface Pública ---
+
+    //Valida o pacote
+    void validate() const {
+        if (sid.size() != 16)
+            throw std::invalid_argument("SID must be exactly 16 bytes");
+        if (sttl > 0x07FFFFFF)
+            throw std::out_of_range("STTL must fit in 27 bits");
+        if (data.size() > 1440)
+            throw std::out_of_range("Payload must be <= 1440 bytes");
+    }
+
+    //Converte o pacote para vetor de bytes para serem enviados
+    std::vector<uint8_t> build() const {
+        validate();
+        std::vector<uint8_t> buf;
+        buf.reserve(16 + 4 + 4 + 4 + 2 + 1 + 1 + data.size());
+
+        insert_bytes(buf, sid);
+        insert_uint32(buf, build_flags_and_sttl());
+        insert_uint32(buf, seqnum);
+        insert_uint32(buf, acknum);
+        insert_uint16(buf, window);
+        buf.push_back(fid);
+        buf.push_back(fo);
+        insert_bytes(buf, data);
+
+        return buf;
+    }
+
+    //Imprime o pacote para depuração
+    void print() const {
+        std::cout << "SID: ";
+        for (auto b : sid) std::cout << std::hex << int(b) << " ";
+        std::cout << std::dec
+                  << "\nSTTL: "   << sttl
+                  << "\nConnect: " << connect
+                  << "\nRevive: "  << revive
+                  << "\nAck: "     << ack
+                  << "\nAccept: "  << accept
+                  << "\nMore: "    << more
+                  << "\nSeqnum: "  << seqnum
+                  << "\nAcknum: "  << acknum
+                  << "\nWindow: "  << window
+                  << "\nFID: "     << int(fid)
+                  << "\nFO: "      << int(fo)
+                  << "\nData size: "<< data.size()
+                  << std::endl;
+    }
+
+    //Transforma um vetor de bytes em um novo pacote
+    static slow_packet parse(const std::vector<uint8_t>& buf) {
+        constexpr size_t HEADER = 16 + 4 + 4 + 4 + 2 + 1 + 1;
+        if (buf.size() < HEADER)
+            throw std::invalid_argument("Buffer too small for SLOW packet");
+
+        // SID
+        std::vector<uint8_t> sid(buf.begin(), buf.begin() + 16);
+
+        // STTL + flags
+        uint32_t sf    = read_u32(buf, 16);
+        uint32_t sttl_  = sf & 0x07FFFFFF;
+        uint8_t  flags = (sf >> 27) & 0x1F;
+
+        bool c  = flags & 0x01;
+        bool r  = flags & 0x02;
+        bool a  = flags & 0x04;
+        bool ac = flags & 0x08;
+        bool m  = flags & 0x10;
+
+        // Seq e Ack
+        uint32_t seq   = read_u32(buf, 20);
+        uint32_t ack   = read_u32(buf, 24);
+
+        // Window, fid, fo
+        uint16_t win = read_u16(buf, 28);
+        uint8_t  fid_ = buf[30];
+        uint8_t  fo_  = buf[31];
+
+        // Payload
+        std::vector<uint8_t> payload(buf.begin() + 32, buf.end());
+
+        return slow_packet(sid, sttl_, c, r, a, ac, m, seq, ack, win, fid_, fo_, payload);
+    }
+
+private:
+
+    // --- Auxiliares para a construção do pacote ---
+
+    //Insere 32 bits little endian
+    static void insert_uint32(std::vector<uint8_t>& buf, uint32_t v) {
+        buf.push_back(uint8_t( v        & 0xFF));
+        buf.push_back(uint8_t((v >> 8 ) & 0xFF));
+        buf.push_back(uint8_t((v >> 16) & 0xFF));
+        buf.push_back(uint8_t((v >> 24) & 0xFF));
+    }
+
+    //Insere 16 bits little endian
+    static void insert_uint16(std::vector<uint8_t>& buf, uint16_t v) {
+        buf.push_back(uint8_t( v        & 0xFF));
+        buf.push_back(uint8_t((v >> 8 ) & 0xFF));
+    }
+
+    //Insere todos os bytes de um vetor fonte no final do vetor destino
+    static void insert_bytes(std::vector<uint8_t>& buf, const std::vector<uint8_t>& src) {
+        buf.insert(buf.end(), src.begin(), src.end());
+    }
+
+    //Coloca todas as flags como bits em um byte
+    uint8_t build_flags() const {
+        uint8_t f = 0;
+        if (connect) f |= 0x01;
+        if (revive)  f |= 0x02;
+        if (ack)     f |= 0x04;
+        if (accept)  f |= 0x08;
+        if (more)    f |= 0x10;
+        return f;
+    }
+
+    //Junta o sttl com as flags
+    uint32_t build_flags_and_sttl() const {
+        return sttl | (uint32_t(build_flags()) << 27);
+    }
+
+    // --- Auxiliares para o parsing do pacote ---
+    
+    //Lê 32 bits little endian
+    static uint32_t read_u32(const std::vector<uint8_t>& buf, size_t p) {
+        return uint32_t(buf[p])
+             | (uint32_t(buf[p+1]) << 8)
+             | (uint32_t(buf[p+2]) << 16)
+             | (uint32_t(buf[p+3]) << 24);
+    }
+
+    //Lê 16 bits little endian
+    static uint16_t read_u16(const std::vector<uint8_t>& buf, size_t p) {
+        return uint16_t(buf[p])
+             | (uint16_t(buf[p+1]) << 8);
+    }
 };
-typedef struct slow_packet* Slow_packet;
-
-void validate_slow_packet(const slow_packet* p) {
-  if (!p) throw std::invalid_argument("ponteiro nulo.");
-  if (p->sid.size() != 16)
-    throw std::invalid_argument("SID deve ser 16 bytes");
-  if (p->sttl > 0x07FFFFFF)
-    throw std::out_of_range("STTL deve caber em 27 bits");
-  if (p->data.size() > 1440)
-    throw std::out_of_range("Dados devem ser <= 1440 bytes");
-}
-
-uint8_t build_flags(Slow_packet packet) {
-    uint8_t flags = 0;
-    if (packet->connect) flags |= 0x01; // bit 0
-    if (packet->revive) flags |= 0x02; // bit 1
-    if (packet->ack) flags |= 0x04; // bit 2
-    if (packet->accept) flags |= 0x08; // bit 3
-    if (packet->more) flags |= 0x10; // bit 4
-    return flags;
-}
-
-uint32_t build_flags_and_sttl(Slow_packet packet) {
-    // Inicia apenas com o sttl de 32 bits
-    uint32_t sttl_and_flags = packet->sttl;
-
-    // Adiciona as flags ao sttl_and_flags
-    sttl_and_flags |= (static_cast<uint32_t>(build_flags(packet)) << 27); // As flags ocupam os 5 bits mais significativos
-    
-    // Retorna o sttl e as flags combinados
-    return sttl_and_flags;
-}
-
-//Função para transformar um pacote SLOW em um vetor de bytes para ser transmitido
-std::vector<uint8_t> build_slow_packet(Slow_packet packet) {
-    
-    std::vector<uint8_t> result;
-
-    result.reserve(16 + 4 + 4 + 4 + 2 + 1 + 1 + packet->data.size());
-
-    // Adiciona o SID
-    insert_bytes(result, packet->sid);
-
-    // Adiciona o STTL e as flags
-    insert_uint32(result, build_flags_and_sttl(packet));
-
-    // Adiciona o seqnum e acknum
-    insert_uint32(result, packet->seqnum);
-    insert_uint32(result, packet->acknum);
-
-    // Adiciona a janela, fid e fo
-    insert_uint16(result, packet->window);
-    result.push_back(packet->fid);
-    result.push_back(packet->fo);
-
-    // Adiciona os dados
-    insert_bytes(result, packet->data);
-
-    return result;
-}
-
-std::vector<uint8_t> validate_and_build_slow_packet(Slow_packet packet) {
-    
-    validate_slow_packet(packet);
-
-    return build_slow_packet(packet);
-}
-
-// Função para imprimir o conteúdo do pacote recebido (para depuração)
-void print_slow_packet(const slow_packet* packet) {
-    std::cout << "SID: ";
-    for (const auto& byte : packet->sid) {
-        std::cout << std::hex << static_cast<int>(byte) << " ";
-    }
-    std::cout << "\nSTTL: " << packet->sttl
-              << "\nConnect: " << packet->connect
-              << "\nRevive: " << packet->revive
-              << "\nAck: " << packet->ack
-              << "\nAccept: " << packet->accept
-              << "\nMore: " << packet->more
-              << "\nSeqnum: " << packet->seqnum
-              << "\nAcknum: " << packet->acknum
-              << "\nWindow: " << packet->window
-              << "\nFID: " << static_cast<int>(packet->fid)
-              << "\nFO: " << static_cast<int>(packet->fo)
-              << "\nData size: " << packet->data.size() 
-              << std::endl;
-}
-
-//Função para transformar um vetor de bytes em um pacote SLOW
-slow_packet parse_slow_packet(const std::vector<uint8_t>& data) {
-    constexpr size_t HEADER = 16 + 4 + 4 + 4 + 2 + 1 + 1;
-    if (data.size() < HEADER) {
-        throw std::invalid_argument("Dados insuficientes para construir um pacote SLOW");
-    }
-
-    // Funções auxiliares para ler valores de 32 e 16 bits little endian
-    auto read_u32 = [&](size_t p){
-        return  uint32_t(data[p]) 
-              | (uint32_t(data[p+1]) << 8)
-              | (uint32_t(data[p+2]) << 16)
-              | (uint32_t(data[p+3]) << 24);
-    };
-    auto read_u16 = [&](size_t p){
-        return  uint16_t(data[p]) 
-              | (uint16_t(data[p+1]) << 8);
-    };
-
-    // 1) SID
-    std::vector<uint8_t> sid(data.begin(), data.begin()+16);
-
-    // 2) STTL + flags
-    uint32_t sf = read_u32(16);
-    uint32_t sttl  = sf & 0x07FFFFFF;
-    uint8_t  flags = (sf >> 27) & 0x1F;
-
-    bool c = flags & 0x01;
-    bool r = flags & 0x02;
-    bool a = flags & 0x04;
-    bool ac= flags & 0x08;
-    bool m = flags & 0x10;
-
-    // 3) seq/ack
-    uint32_t seq   = read_u32(20);
-    uint32_t ack   = read_u32(24);
-
-    // 4) window, fid, fo
-    uint16_t win   = read_u16(28);
-    uint8_t  fid   = data[30];
-    uint8_t  fo    = data[31];
-
-    // 5) payload
-    std::vector<uint8_t> payload(data.begin()+32, data.end());
-
-    // Constroe e retorna o pacote SLOW
-    slow_packet pkt;
-    pkt.sid     = std::move(sid);
-    pkt.sttl    = sttl;
-    pkt.connect = c;
-    pkt.revive  = r;
-    pkt.ack     = a;
-    pkt.accept  = ac;
-    pkt.more    = m;
-    pkt.seqnum  = seq;
-    pkt.acknum  = ack;
-    pkt.window  = win;
-    pkt.fid     = fid;
-    pkt.fo      = fo;
-    pkt.data    = std::move(payload);
-
-    return pkt;
-}
