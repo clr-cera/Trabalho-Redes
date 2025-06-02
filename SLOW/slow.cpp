@@ -8,6 +8,7 @@
 #include <string>
 #include <stdexcept>
 #include <cstring>
+#include <bitset>
 
 #define IPCRUZ "142.93.184.175"
 #define PORTA 7033
@@ -93,9 +94,13 @@ public:
 
     //Imprime o pacote para depuração
     void print() {
+        uint32_t sf_combined = buildFlagsAndSttl();
+        std::bitset<32> bits(sf_combined);
         std::cout << "SID: ";
         for (auto b : sid) std::cout << std::hex << int(b) << " ";
         std::cout << std::dec
+                  << "\nSTTL: "   << sttl
+                  << "\nSTTL+Flags (binary): " << bits
                   << "\nSTTL: "   << sttl
                   << "\nConnect: " << connect
                   << "\nRevive: "  << revive
@@ -130,14 +135,14 @@ public:
 
         // STTL + flags
         uint32_t sf    = readU32(buf, 16);
-        uint32_t sttl_  = sf & 0x07FFFFFF;
-        uint8_t  flags = (sf >> 27) & 0x1F;
+        uint8_t  flags = sf & 0x1F;
+        uint32_t sttl_ = sf >> 5;
 
-        bool c  = flags & 0x01;
-        bool r  = flags & 0x02;
+        bool m  = flags & 0x01;
+        bool ac  = flags & 0x02;
         bool a  = flags & 0x04;
-        bool ac = flags & 0x08;
-        bool m  = flags & 0x10;
+        bool r = flags & 0x08;
+        bool c  = flags & 0x10;
 
         // Seq e Ack
         uint32_t seq   = readU32(buf, 20);
@@ -179,17 +184,17 @@ private:
 
     //Junta as flags com o sttl
     uint32_t buildFlagsAndSttl() const {
-        uint32_t word = 0;
-        word |= (sttl & 0x07FFFFFF);
+        uint32_t word = (sttl & 0x07FFFFFF) << 5;
 
-        if (connect) word |= (1u << 27);
-        if (revive)  word |= (1u << 28);
-        if (ack)     word |= (1u << 29);
-        if (accept)  word |= (1u << 30);
-        if (more)    word |= (1u << 31);
+        if (connect) word |= (1u << 4);
+        if (revive)  word |= (1u << 3);
+        if (ack)     word |= (1u << 2);
+        if (accept)  word |= (1u << 1);
+        if (more)    word |= (1u << 0);
 
         return word;
     }
+
 
 
     // --- Auxiliares para o parsing do pacote ---
@@ -268,6 +273,8 @@ public:
         if(received < 0) {
             std::cout << "Recebimento falhou";
         }
+
+         buffer.resize(static_cast<size_t>(received));
 
         return buffer;
     }
