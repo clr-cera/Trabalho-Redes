@@ -109,10 +109,18 @@ public:
                   << "\nFO: "      << int(fo)
                   << "\nData size: "<< data.size()
                   << std::endl;
+        if (!data.empty()) {
+            std::cout << "Texto dos dados: ";
+            for (uint8_t byte : data) {
+                // Transforma cada byte em caracter
+                std::cout << static_cast<char>(byte);
+            }
+            std::cout << std::endl;
+        }
     }
 
     //Transforma um vetor de bytes em um novo pacote
-    static SlowPacket parse(std::vector<uint8_t>& buf) {
+    static SlowPacket parse(const std::vector<uint8_t>& buf) {
         size_t HEADER = 16 + 4 + 4 + 4 + 2 + 1 + 1;
         if (buf.size() < HEADER)
             std::cout << "Buffer too small for SLOW packet";
@@ -152,10 +160,10 @@ private:
 
     //Insere 32 bits little endian
     static void insertUint32(std::vector<uint8_t>& buf, uint32_t v) {
-        buf.push_back(uint8_t( v        & 0xFF));
-        buf.push_back(uint8_t((v >> 8 ) & 0xFF));
-        buf.push_back(uint8_t((v >> 16) & 0xFF));
-        buf.push_back(uint8_t((v >> 24) & 0xFF));
+        buf.push_back(uint8_t( v        & 0xFF));   // byte-0
+        buf.push_back(uint8_t((v >> 8 ) & 0xFF));   // byte-1
+        buf.push_back(uint8_t((v >> 16) & 0xFF));   // byte-2
+        buf.push_back(uint8_t((v >> 24) & 0xFF));   // byte-3
     }
 
     //Insere 16 bits little endian
@@ -169,21 +177,20 @@ private:
         buf.insert(buf.end(), src.begin(), src.end());
     }
 
-    //Coloca todas as flags como bits em um byte
-    uint8_t buildFlags() {
-        uint8_t f = 0;
-        if (connect) f |= 0x01;
-        if (revive)  f |= 0x02;
-        if (ack)     f |= 0x04;
-        if (accept)  f |= 0x08;
-        if (more)    f |= 0x10;
-        return f;
+    //Junta as flags com o sttl
+    uint32_t buildFlagsAndSttl() const {
+        uint32_t word = 0;
+        word |= (sttl & 0x07FFFFFF);
+
+        if (connect) word |= (1u << 27);
+        if (revive)  word |= (1u << 28);
+        if (ack)     word |= (1u << 29);
+        if (accept)  word |= (1u << 30);
+        if (more)    word |= (1u << 31);
+
+        return word;
     }
 
-    //Junta o sttl com as flags
-    uint32_t buildFlagsAndSttl() {
-        return sttl | (uint32_t(buildFlags()) << 27);
-    }
 
     // --- Auxiliares para o parsing do pacote ---
     
@@ -341,6 +348,9 @@ int main(void){
 
     //Imprime o pacote connect
     connect_pkt.print();
+
+    std::cout << "Pacote construido e parseado:" << std::endl;
+    SlowPacket::parse(connect_pkt.build()).print();
 
     std::cout << "Enviando pacote" << std::endl;
     sock.send(connect_pkt.build());
