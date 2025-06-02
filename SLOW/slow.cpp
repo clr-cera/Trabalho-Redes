@@ -10,7 +10,7 @@
 #include <cstring>
 
 #define IPCRUZ "142.93.184.175"
-#define PORTA 7030
+#define PORTA 7033
 
 class SlowPacket {
 public:
