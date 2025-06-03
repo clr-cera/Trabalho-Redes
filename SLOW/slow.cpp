@@ -356,9 +356,6 @@ int main(void){
     //Imprime o pacote connect
     connect_pkt.print();
 
-    std::cout << "Pacote construido e parseado:" << std::endl;
-    SlowPacket::parse(connect_pkt.build()).print();
-
     std::cout << "Enviando pacote" << std::endl;
     sock.send(connect_pkt.build());
     std::cout << "Pacote enviado" << std::endl;
@@ -373,15 +370,18 @@ int main(void){
     //Imprime o pacote recebido
     reply_pkt.print();
 
+    bool connected = false;
+
     if (!reply_pkt.connect   && 
             !reply_pkt.revive    &&
             !reply_pkt.ack       &&
             reply_pkt.accept     &&
             !reply_pkt.more)
         {
-            std::cout << "[✓] This is a valid Setup (Accept) packet.\n";
+            std::cout << "Conexão iniciada.\n";
+            connected = true;
         } else {
-            std::cout << "[✗] Reply is NOT a Setup/Accept packet.  Flags are:\n"
+            std::cout << "Conexão rejeitada\n"
                  << "    connect=" << reply_pkt.connect
                  << "  revive="   << reply_pkt.revive
                  << "  ack="      << reply_pkt.ack
@@ -389,6 +389,63 @@ int main(void){
                  << "  more="     << reply_pkt.more
                  << "\n";
         }
+    
+    if(!connected) {
+        std::cout << "Conexão falhou.\n";
+        return 1;
+    }
+    std::cout << "Conexão estabelecida com sucesso!\n";
+    std::cout << "Enviando pacote de teste..." << std::endl;
+    // Envia um pacote de teste
+    SlowPacket test_pkt(
+        reply_pkt.sid,      // sid
+        0,                  // sttl
+        false,              // connect
+        false,              // revive
+        false,              // ack
+        false,              // accept
+        false,              // more
+        1,                  // seqnum
+        0,                  // acknum
+        1440,               // window
+        0,                  // fid
+        0,                  // fo
+        {'T', 'e', 's', 't'}// data
+    );
+    test_pkt.print();
+    sock.send(test_pkt.build());
+    std::cout << "Pacote de teste enviado." << std::endl;
+    std::cout << "Aguardando resposta do pacote de teste..." << std::endl;
+    std::vector<uint8_t> test_reply_raw = sock.receive();
+    std::cout << "✔ Recebido " << test_reply_raw.size() << " bytes.\n\n";
+    SlowPacket::parse(test_reply_raw).print();
+    std::cout << "Resposta do pacote de teste recebida." << std::endl;
+    std::cout << "Fechando conexão..." << std::endl;
+    // Encerra a conexão
+    SlowPacket close_pkt(
+        reply_pkt.sid,      // sid
+        0,                  // sttl
+        true,              // connect
+        true,              // revive
+        true,              // ack
+        false,              // accept
+        false,              // more
+        2,                  // seqnum
+        0,                  // acknum
+        1440,               // window
+        0,                  // fid
+        0,                  // fo
+        {}                  // data
+    );
+    close_pkt.print();
+    sock.send(close_pkt.build());
+    std::cout << "Conexão encerrada." << std::endl;
+    std::cout << "Fechando socket..." << std::endl;
+    // Fecha o socket
+    sock.~UdpSocket();
+    std::cout << "Socket fechado." << std::endl;
+    std::cout << "Programa finalizado com sucesso." << std::endl;
 
+    // Retorna 0 para indicar sucesso
     return 0;
 }
