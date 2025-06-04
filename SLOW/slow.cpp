@@ -37,6 +37,11 @@ public:
     std::vector<uint8_t> data;
 
     // --- Construtores ---
+    
+    //Construtor padrão
+    SlowPacket() 
+        : sid(16, 0), sttl(0), connect(false), revive(false), ack(false), accept(false), more(false),
+          seqnum(0), acknum(0), window(0), fid(0), fo(0) {}
 
     //Construtor explícito
     SlowPacket(const std::vector<uint8_t>& sid_,
@@ -193,8 +198,6 @@ private:
         return word;
     }
 
-
-
     // --- Auxiliares para o parsing do pacote ---
     
     //Lê 32 bits little endian
@@ -261,6 +264,10 @@ public:
     }
 
     std::vector<uint8_t> receive(size_t max_length = 1500){
+        if(max_length == 0){
+            std::cout << "Tamanho máximo inválido";
+        }
+        
         std::vector<uint8_t> buffer(max_length);
 
         sockaddr_in src{};
@@ -272,13 +279,20 @@ public:
             std::cout << "Recebimento falhou";
         }
 
-         buffer.resize(static_cast<size_t>(received));
+        buffer.resize(static_cast<size_t>(received));
 
         return buffer;
     }
 
-    void setReceiveTimeout(int timeout_ms){
-        //To be implemented
+    void setReceiveTimeout(int milliseconds){
+        if (milliseconds < 0) {
+            std::cout << "Timeout must be non-negative";
+        }
+        timeval tv{};
+        tv.tv_sec  = milliseconds / 1000;
+        tv.tv_usec = (milliseconds % 1000) * 1000;
+
+        ::setsockopt(socket_fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof(tv));
     }
 
 private:
@@ -350,34 +364,94 @@ public:
         socket.setReceiveTimeout(TIMEOUT_MS);
     }
 
-    bool connect(){
+    // --- Métodos públicos ---
 
+    //Conecta ao servidor remoto
+    bool connect(){
+        SlowPacket pkt = pktConnect();
+        for(int attempt = 0; attempt < RETRY_LIMIT; attempt++){
+            socket.send(pkt.build());
+            SlowPacket response;
+
+            if(receivePacket(response)){
+                if(response.accept && !response.connect && !response.revive){
+                    sid = response.sid;
+                    sttl = response.sttl;
+                    next_seqnum = response.seqnum + 1;
+                    last_acknum = response.acknum;
+                    peer_window = response.window;
+                    session_active = true;
+                    revived = false;
+                    return true; // Conexão bem-sucedida
+                }
+                waitRetry();
+        }
+    }
+
+    bool sendData(const std::vector<uint8_t>& data_chunk){
+        if(!session_active){
+            std::cout << "Sessão não está ativa. Conecte primeiro.";
+            return false;
+        }
+
+        uint8_t fid = 0; // ID do fragmento de dados
+        uint8_t fo = 0;  // Offset do fragmento de dados
+        uint8_t total = payload.size();
+        uint8_t offset = 0;
+
+        while(offset < total){
+            size_t chunk_size = std::min(MAX_DATA_SIZE, total - offset);
+            bool more_flag = ((offset + chunk_size) < total);
+
+            // WIP
+        }
     }
 
 private:
 
+    // --- Auxiliares para a construção de pacotes ---
+
+    //Cria um pacote Connect padrão
     SlowPacket pktConnect(){
         SlowPacket connect_pkt(sid, 0, true, false, false, false, false, 0, 0, 1440, 0, 0, {});
         return connect_pkt;
     }
 
+    //Cria um pacote Disconnect padrão
     SlowPacket pktDisconnect(){
         SlowPacket disconnect_pkt(sid, sttl, true, true, true, false, false, next_seqnum, last_acknum, 0, 0, 0, {});
         return disconnect_pkt;
     }
 
-    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag, bool revive_flag){
+    //Cria um pacote de dados
+    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag){
+        bool revive_flag = false;
+        if(!session_active){
+            revive_flag = true;
+        }
         SlowPacket data_pkt(sid, sttl, false, revive_flag, true, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
         return data_pkt;
     }
 
+    // --- Auxiliares para operações ---
+
+    //Recebe um pacote e salva os dados no pacote passado por parametro
+    bool receivePacket(SlowPacket& pkt) {
+        std::vector<uint8_t> raw_data = socket.receive();
+        if (raw_data.empty()) {
+            std::cout << "Nenhum dado recebido";
+            return false;
+        }
+        pkt = SlowPacket::parse(raw_data);
+        return true;
+    }
+
+    //Aguarda TIMEOUT_MS
+    void waitRetry(){
+        usleep(TIMEOUT_MS * 1000);
+    }
 
 };
-
-//Retorna um pacote connect padrão
-SlowPacket connect(){
-    
-}
 
 int main(void){
 
