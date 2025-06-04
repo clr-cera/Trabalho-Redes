@@ -10,8 +10,13 @@
 #include <cstring>
 #include <bitset>
 
-#define IPCRUZ "142.93.184.175"
-#define PORTA 7033
+#define REMOTE_IP "142.93.184.175" //IP de destino
+#define PORTA 7033 //Porta de destino
+#define MAX_DATA_SIZE 1440 //Máximo de dados em um pacote
+#define RETRY_LIMIT 3 //Limite máximo de retransmissão
+#define TIMEOUT_MS 2000 //Timeout para retransmitir
+
+
 
 class SlowPacket {
 public:
@@ -32,13 +37,6 @@ public:
     std::vector<uint8_t> data;
 
     // --- Construtores ---
-
-    //Construtor padrão
-    SlowPacket()
-        : sid(16, 0), sttl(0),
-          connect(false), revive(false), ack(false), accept(false), more(false),
-          seqnum(0), acknum(0), window(0), fid(0), fo(0), data()
-    {}
 
     //Construtor explícito
     SlowPacket(const std::vector<uint8_t>& sid_,
@@ -279,6 +277,10 @@ public:
         return buffer;
     }
 
+    void setReceiveTimeout(int timeout_ms){
+        //To be implemented
+    }
+
 private:
 
     //Cria o Socket
@@ -319,32 +321,69 @@ private:
     }
 };
 
+class SlowConnection{
+public:
+
+    // --- Dados da classe ---
+    UdpSocket               socket;
+    std::vector<uint8_t>    sid;
+    uint32_t                sttl;
+    uint32_t                next_seqnum;
+    uint32_t                last_acknum;
+    uint16_t                peer_window;
+    bool                    session_active;
+    bool                    revived;
+
+    // --- Construtores e destrutores ---
+    SlowConnection(const std::string& local_ip, uint16_t local_port, const std::string& remote_ip, uint16_t remote_port)
+        : socket(local_ip, local_port, remote_ip, remote_port)
+    {
+        std::vector<uint8_t> nil_uuid(16, 0);
+        sid = nil_uuid;
+        sttl = 0;
+        next_seqnum = 0;
+        last_acknum = 0;
+        peer_window = 0;
+        session_active = false;
+        revived = false;
+
+        socket.setReceiveTimeout(TIMEOUT_MS);
+    }
+
+    bool connect(){
+
+    }
+
+private:
+
+    SlowPacket pktConnect(){
+        SlowPacket connect_pkt(sid, 0, true, false, false, false, false, 0, 0, 1440, 0, 0, {});
+        return connect_pkt;
+    }
+
+    SlowPacket pktDisconnect(){
+        SlowPacket disconnect_pkt(sid, sttl, true, true, true, false, false, next_seqnum, last_acknum, 0, 0, 0, {});
+        return disconnect_pkt;
+    }
+
+    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag, bool revive_flag){
+        SlowPacket data_pkt(sid, sttl, false, revive_flag, true, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
+        return data_pkt;
+    }
+
+
+};
+
 //Retorna um pacote connect padrão
 SlowPacket connect(){
-    std::vector<uint8_t> nil_uuid(16, 0);
-    SlowPacket connect_pkt(
-        nil_uuid,          // sid
-        0,                 // sttl
-        true,              // connect
-        false,             // revive
-        false,             // ack
-        false,             // accept
-        false,             // more
-        0,                 // seqnum
-        0,                 // acknum
-        1440,              // window
-        0,                 // fid
-        0,                 // fo
-        {}                 // data
-    );
-    return connect_pkt;
+    
 }
 
 int main(void){
 
 
     //Cria o socket
-    UdpSocket sock = UdpSocket("0.0.0.0", PORTA, IPCRUZ, PORTA);
+    UdpSocket sock = UdpSocket("0.0.0.0", PORTA, REMOTE_IP, PORTA);
 
     std::cout << "Socket criado com sucesso!" << std::endl;
 
