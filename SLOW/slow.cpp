@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <cstring>
 #include <bitset>
+#include <fstream>
+
 
 #define REMOTE_IP "142.93.184.175" //IP de destino
 #define PORTA 7033 //Porta de destino
@@ -277,6 +279,7 @@ public:
 
         if(received < 0) {
             std::cout << "Recebimento falhou";
+            return {};
         }
 
         buffer.resize(static_cast<size_t>(received));
@@ -336,6 +339,51 @@ private:
 };
 
 class SlowConnection{
+
+private:
+
+    // --- Auxiliares para a construção de pacotes ---
+
+    //Cria um pacote Connect padrão
+    SlowPacket pktConnect(){
+        SlowPacket connect_pkt(sid, 0, true, false, false, false, false, 0, 0, 1440, 0, 0, {});
+        return connect_pkt;
+    }
+
+    //Cria um pacote Disconnect padrão
+    SlowPacket pktDisconnect(){
+        SlowPacket disconnect_pkt(sid, sttl, true, true, true, false, false, next_seqnum, last_acknum, 0, 0, 0, {});
+        return disconnect_pkt;
+    }
+
+    //Cria um pacote de dados
+    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag){
+        bool revive_flag = false;
+        if(!session_active){
+            revive_flag = true;
+        }
+        SlowPacket data_pkt(sid, sttl, false, revive_flag, false /*ACK deve ser true, mas não funciona com true*/, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
+        return data_pkt;
+    }
+
+    // --- Auxiliares para operações ---
+
+    //Recebe um pacote e salva os dados no pacote passado por parametro
+    bool receivePacket(SlowPacket& pkt) {
+        std::vector<uint8_t> raw_data = socket.receive();
+        if (raw_data.empty()) {
+            std::cout << "Nenhum dado recebido";
+            return false;
+        }
+        pkt = SlowPacket::parse(raw_data);
+        return true;
+    }
+
+    //Aguarda TIMEOUT_MS
+    void waitRetry(){
+        usleep(TIMEOUT_MS * 1000);
+    }
+
 public:
 
     // --- Dados da classe ---
@@ -374,6 +422,10 @@ public:
             SlowPacket response;
 
             if(receivePacket(response)){
+
+                //debugging
+                response.print();
+
                 if(response.accept && !response.connect && !response.revive){
                     sid = response.sid;
                     sttl = response.sttl;
@@ -385,180 +437,126 @@ public:
                     return true; // Conexão bem-sucedida
                 }
                 waitRetry();
+            }
         }
+        return false;
     }
 
-    bool sendData(const std::vector<uint8_t>& data_chunk){
+    //Desconectar
+    bool disconnect(){
         if(!session_active){
+            return true;
+        }
+        
+        SlowPacket disc_pkt = pktDisconnect();
+        socket.send(disc_pkt.build());
+
+        SlowPacket response;
+        if(receivePacket(response)){
+
+        }
+        session_active = false;
+        return true;
+
+    }
+
+    //Enviar uma mensagem que pode ser dividida em diversos fragmentos
+    bool sendData(const std::vector<uint8_t>& message) {
+        if(!session_active){
+
+            // WIP - TENTAR REVIVER A CONEXÃO
             std::cout << "Sessão não está ativa. Conecte primeiro.";
             return false;
         }
 
         uint8_t fid = 0; // ID do fragmento de dados
         uint8_t fo = 0;  // Offset do fragmento de dados
-        uint8_t total = payload.size();
-        uint8_t offset = 0;
+        size_t total = message.size();
+        size_t offset = 0;
 
         while(offset < total){
-            size_t chunk_size = std::min(MAX_DATA_SIZE, total - offset);
+
+            //WIP - IMPLEMENTAR JANELA DESLIZANTE
+
+            size_t chunk_size = std::min(static_cast<size_t>(MAX_DATA_SIZE), total - offset);
             bool more_flag = ((offset + chunk_size) < total);
 
-            // WIP
+            std::vector<uint8_t> payload(message.begin() + offset, message.begin() + offset + chunk_size);
+
+            bool fragment_sent = false;
+            for(int attempt = 0; attempt < RETRY_LIMIT && !fragment_sent; attempt++){
+                SlowPacket data_pkt = pktData(payload, fid, fo, more_flag);
+                socket.send(data_pkt.build());
+
+                //debugging
+                data_pkt.print();
+
+                //Espera pelo Ack
+                SlowPacket ack_pkt;
+                if(receivePacket(ack_pkt)){
+
+                    if(ack_pkt.ack && ack_pkt.acknum == data_pkt.seqnum){
+                        next_seqnum++;
+                        last_acknum = ack_pkt.seqnum;
+                        peer_window = ack_pkt.window;
+                        fragment_sent = true;
+                        break;
+                    }
+                }
+                waitRetry();
+            }
+
+            if(!fragment_sent)
+                return false;
+        
+            offset += chunk_size;
+            fo++;
         }
-    }
-
-private:
-
-    // --- Auxiliares para a construção de pacotes ---
-
-    //Cria um pacote Connect padrão
-    SlowPacket pktConnect(){
-        SlowPacket connect_pkt(sid, 0, true, false, false, false, false, 0, 0, 1440, 0, 0, {});
-        return connect_pkt;
-    }
-
-    //Cria um pacote Disconnect padrão
-    SlowPacket pktDisconnect(){
-        SlowPacket disconnect_pkt(sid, sttl, true, true, true, false, false, next_seqnum, last_acknum, 0, 0, 0, {});
-        return disconnect_pkt;
-    }
-
-    //Cria um pacote de dados
-    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag){
-        bool revive_flag = false;
-        if(!session_active){
-            revive_flag = true;
-        }
-        SlowPacket data_pkt(sid, sttl, false, revive_flag, true, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
-        return data_pkt;
-    }
-
-    // --- Auxiliares para operações ---
-
-    //Recebe um pacote e salva os dados no pacote passado por parametro
-    bool receivePacket(SlowPacket& pkt) {
-        std::vector<uint8_t> raw_data = socket.receive();
-        if (raw_data.empty()) {
-            std::cout << "Nenhum dado recebido";
-            return false;
-        }
-        pkt = SlowPacket::parse(raw_data);
+        
         return true;
-    }
-
-    //Aguarda TIMEOUT_MS
-    void waitRetry(){
-        usleep(TIMEOUT_MS * 1000);
     }
 
 };
 
-int main(void){
+//Main para testar a biblioteca
+int main() {
+    // Testing SlowConnection class and its methods with debug prints
 
+    std::cout << "Starting SLOW Protocol Testing..." << std::endl;
 
-    //Cria o socket
-    UdpSocket sock = UdpSocket("0.0.0.0", PORTA, REMOTE_IP, PORTA);
+    // Step 1: Test connection
+    std::cout << "\n---- Test 1: Connect to Central ----" << std::endl;
 
-    std::cout << "Socket criado com sucesso!" << std::endl;
-
-    //Cria um pacote connect
-    SlowPacket connect_pkt = connect();
-
-    std::cout << "Pacote Connect:" << std::endl;
-
-    //Imprime o pacote connect
-    connect_pkt.print();
-
-    std::cout << "Enviando pacote" << std::endl;
-    sock.send(connect_pkt.build());
-    std::cout << "Pacote enviado" << std::endl;
-
-    std::cout << "Aguardando resposta..." << std::endl;
-    std::vector<uint8_t> reply_raw = sock.receive();
-    std::cout << "✔ Recebido " << reply_raw.size() << " bytes.\n\n";
-
-    //Transforma o vetor de bytes recebido em um pacote SlowPacket
-    SlowPacket reply_pkt = SlowPacket::parse(reply_raw);
-    std::cout << "Pacote recebido:" << std::endl;
-    //Imprime o pacote recebido
-    reply_pkt.print();
-
-    bool connected = false;
-
-    if (!reply_pkt.connect   && 
-            !reply_pkt.revive    &&
-            !reply_pkt.ack       &&
-            reply_pkt.accept     &&
-            !reply_pkt.more)
-        {
-            std::cout << "Conexão iniciada.\n";
-            connected = true;
-        } else {
-            std::cout << "Conexão rejeitada\n"
-                 << "    connect=" << reply_pkt.connect
-                 << "  revive="   << reply_pkt.revive
-                 << "  ack="      << reply_pkt.ack
-                 << "  accept="   << reply_pkt.accept
-                 << "  more="     << reply_pkt.more
-                 << "\n";
-        }
-    
-    if(!connected) {
-        std::cout << "Conexão falhou.\n";
+    SlowConnection conn("0.0.0.0", 7033, REMOTE_IP, PORTA);
+    if (conn.connect()) {
+        std::cout << "[✓] Connection established successfully!" << std::endl;
+    } else {
+        std::cout << "[✗] Connection failed!" << std::endl;
         return 1;
     }
-    std::cout << "Conexão estabelecida com sucesso!\n";
-    std::cout << "Enviando pacote de teste..." << std::endl;
-    // Envia um pacote de teste
-    SlowPacket test_pkt(
-        reply_pkt.sid,      // sid
-        0,                  // sttl
-        false,              // connect
-        false,              // revive
-        false,              // ack
-        false,              // accept
-        false,              // more
-        1,                  // seqnum
-        0,                  // acknum
-        1440,               // window
-        0,                  // fid
-        0,                  // fo
-        {'T', 'e', 's', 't'}// data
-    );
-    test_pkt.print();
-    sock.send(test_pkt.build());
-    std::cout << "Pacote de teste enviado." << std::endl;
-    std::cout << "Aguardando resposta do pacote de teste..." << std::endl;
-    std::vector<uint8_t> test_reply_raw = sock.receive();
-    std::cout << "✔ Recebido " << test_reply_raw.size() << " bytes.\n\n";
-    SlowPacket::parse(test_reply_raw).print();
-    std::cout << "Resposta do pacote de teste recebida." << std::endl;
-    std::cout << "Fechando conexão..." << std::endl;
-    // Encerra a conexão
-    SlowPacket close_pkt(
-        reply_pkt.sid,      // sid
-        0,                  // sttl
-        true,              // connect
-        true,              // revive
-        true,              // ack
-        false,              // accept
-        false,              // more
-        2,                  // seqnum
-        0,                  // acknum
-        1440,               // window
-        0,                  // fid
-        0,                  // fo
-        {}                  // data
-    );
-    close_pkt.print();
-    sock.send(close_pkt.build());
-    std::cout << "Conexão encerrada." << std::endl;
-    std::cout << "Fechando socket..." << std::endl;
-    // Fecha o socket
-    sock.~UdpSocket();
-    std::cout << "Socket fechado." << std::endl;
-    std::cout << "Programa finalizado com sucesso." << std::endl;
 
-    // Retorna 0 para indicar sucesso
+    // Step 2: Test sending small data
+    std::cout << "\n---- Test 2: Send data ----" << std::endl;
+
+    std::vector<uint8_t> message = {'H', 'e', 'l', 'l', 'o', ' ', 'S', 'L', 'O', 'W'};
+    if (conn.sendData(message)) {
+        std::cout << "[✓] Data sent successfully!" << std::endl;
+    } else {
+        std::cout << "[✗] Data sending failed!" << std::endl;
+        return 1;
+    }
+
+    // Step 3: Test disconnecting from the server
+    std::cout << "\n---- Test 3: Disconnect from Central ----" << std::endl;
+
+    try {
+        conn.disconnect();
+        std::cout << "[✓] Disconnected successfully!" << std::endl;
+    } catch (const std::exception& e) {
+        std::cout << "[✗] Error during disconnect: " << e.what() << std::endl;
+        return 1;
+    }
+
+    std::cout << "\nAll tests complete!" << std::endl;
     return 0;
 }
