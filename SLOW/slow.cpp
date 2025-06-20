@@ -508,13 +508,15 @@ public:
             for(int attempt = 0; attempt < RETRY_LIMIT && !fragment_sent; attempt++){
                 SlowPacket data_pkt = pktData(payload, fid, fo, more_flag, revive);
                 socket.send(data_pkt.build());
-
-                //debugging
-                data_pkt.print();
+                std::cout << "DATA ENVIADO" << std::endl;
 
                 //Espera pelo Ack
                 SlowPacket ack_pkt;
                 if(receivePacket(ack_pkt)){
+
+                    //debugging
+                    std::cout << "ACK RECEBIDO" << std::endl;
+
 
                     if(ack_pkt.ack && ack_pkt.acknum == data_pkt.seqnum){
                         next_seqnum++;
@@ -573,7 +575,7 @@ int main() {
     // Step 2: Test sending small data
     std::cout << "\n---- Test 2: Send data ----" << std::endl;
 
-    std::vector<uint8_t> message = stringToBytes("OI CRUZAO EU GOSTO MUITO DE VOCE"); //Dados alearórios para testes
+    std::vector<uint8_t> message = generateRandomData(8000); //Dados alearórios para testes
     if (conn.sendData(message)) {
         std::cout << "[✓] Data sent successfully!" << std::endl;
     } else {
