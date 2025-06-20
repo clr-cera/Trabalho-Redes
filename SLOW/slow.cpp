@@ -357,12 +357,8 @@ private:
     }
 
     //Cria um pacote de dados
-    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag){
-        bool revive_flag = false;
-        if(!session_active){
-            revive_flag = true;
-        }
-        SlowPacket data_pkt(sid, sttl, false, revive_flag, false /*ACK deve ser true, mas não funciona com true*/, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
+    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag, bool revive_flag){
+        SlowPacket data_pkt(sid, sttl, false, revive_flag, true, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
         return data_pkt;
     }
 
@@ -416,17 +412,22 @@ public:
 
     //Conecta ao servidor remoto
     bool connect(){
+
+        //Controi o pacote de conexão
         SlowPacket pkt = pktConnect();
+
+        //Envia o pacote de conexão
         for(int attempt = 0; attempt < RETRY_LIMIT; attempt++){
             socket.send(pkt.build());
             SlowPacket response;
 
+            //Verifica se recebeu uma resposta
             if(receivePacket(response)){
 
-                //debugging
-                response.print();
-
+                //Resposta é um setup válido
                 if(response.accept && !response.connect && !response.revive){
+
+                    //Configura os dados da conexão
                     sid = response.sid;
                     sttl = response.sttl;
                     next_seqnum = response.seqnum + 1;
@@ -434,11 +435,32 @@ public:
                     peer_window = response.window;
                     session_active = true;
                     revived = false;
-                    return true; // Conexão bem-sucedida
+                    break;
                 }
                 waitRetry();
             }
         }
+
+        //Enviar um pacote de dados vazio para finalizar o handshake
+        for(int attempt = 0; attempt < RETRY_LIMIT; attempt++){
+            SlowPacket empty_pkt(sid, sttl, false, false, false, false, false, next_seqnum, last_acknum, 0, 0, 0, {});
+            socket.send(empty_pkt.build());
+            SlowPacket response;
+
+            //Verifica se recebeu uma resposta
+            if(receivePacket(response)){
+
+                //Resposta é um ACK válido
+                if(response.ack && response.acknum == empty_pkt.seqnum){
+                        next_seqnum++;
+                        last_acknum = response.seqnum;
+                        peer_window = response.window;
+                        return true; // Pacote de dados vazio aceito e handshake finalizado
+                }
+                waitRetry();
+            }
+        }
+
         return false;
     }
 
@@ -461,11 +483,10 @@ public:
     }
 
     //Enviar uma mensagem que pode ser dividida em diversos fragmentos
-    bool sendData(const std::vector<uint8_t>& message) {
-        if(!session_active){
+    bool sendData(const std::vector<uint8_t>& message, bool revive = false) {
+        if(!(session_active) && revive == false){
 
-            // WIP - TENTAR REVIVER A CONEXÃO
-            std::cout << "Sessão não está ativa. Conecte primeiro.";
+            std::cout << "Sessão não está ativa. Conecte primeiro ou tente reviver.";
             return false;
         }
 
@@ -485,7 +506,7 @@ public:
 
             bool fragment_sent = false;
             for(int attempt = 0; attempt < RETRY_LIMIT && !fragment_sent; attempt++){
-                SlowPacket data_pkt = pktData(payload, fid, fo, more_flag);
+                SlowPacket data_pkt = pktData(payload, fid, fo, more_flag, revive);
                 socket.send(data_pkt.build());
 
                 //debugging
@@ -518,6 +539,20 @@ public:
 
 };
 
+// Converte uma string para um vetor de bytes a ser enviado
+std::vector<uint8_t> stringToBytes(const std::string& str) {
+    return std::vector<uint8_t>(str.begin(), str.end());
+}
+
+// Gera um vetor uint8_t de dados aleatórios para testes
+std::vector<uint8_t> generateRandomData(size_t size) {
+    std::vector<uint8_t> data(size);
+    for (size_t i = 0; i < size; ++i) {
+        data[i] = rand() % 256; // Gera um byte aleatório
+    }
+    return data;
+}
+
 //Main para testar a biblioteca
 int main() {
     // Testing SlowConnection class and its methods with debug prints
@@ -538,7 +573,7 @@ int main() {
     // Step 2: Test sending small data
     std::cout << "\n---- Test 2: Send data ----" << std::endl;
 
-    std::vector<uint8_t> message = {'H', 'e', 'l', 'l', 'o', ' ', 'S', 'L', 'O', 'W'};
+    std::vector<uint8_t> message = stringToBytes("OI CRUZAO EU GOSTO MUITO DE VOCE"); //Dados alearórios para testes
     if (conn.sendData(message)) {
         std::cout << "[✓] Data sent successfully!" << std::endl;
     } else {
