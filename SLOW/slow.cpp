@@ -1,3 +1,24 @@
+/*
+--- INTRODUÇÃO ---
+
+O trabalho foi desenvolvido pelos alunos:
+
+Clara Ernesto de Carvalho       (14559479)
+Gabriel Barbosa dos Santos      (14613991)
+Renan Parpinelli Scarpin        (14712188)
+
+O código está dividido entre 3 classes:
+SlowPacket <- Abstração do segmento para facilitar manipulação e operações mais baixo nível
+UdpSocket <- Wrapper de um socket UDP simplificado para realizar apenas as operações necessárias em uma conexão SLOW
+SlowConnection <- Classe principal do projeto que implementa o protocolo utilizando as auxiliares.
+
+Após as 3 classes, algumas funções e a Main são definidas apenas para propósitos de testes.
+O pensamento foi desenvolver uma biblioteca útil para a troca de dados utilizando o protocolo SLOW.
+Portanto não há aplicação com interface nem nada do tipo, apenas envio de mensagens de testes.
+Gerenciamento de memória também foi delegado ao programador que estiver desenvolvendo a aplicação.
+*/
+
+// --- Importanto bibliotecas necessárias ---
 #include <iostream>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -11,15 +32,22 @@
 #include <bitset>
 #include <fstream>
 
-
-#define REMOTE_IP "142.93.184.175" //IP de destino
+// --- Definindo constantes que podem facilmente ser alteradas para teste ---
+#define REMOTE_IP "142.93.184.175" //IP de destino (slow.gmelodie.com)
 #define PORTA 7033 //Porta de destino
 #define MAX_DATA_SIZE 1440 //Máximo de dados em um pacote
-#define RETRY_LIMIT 3 //Limite máximo de retransmissão
+#define RETRY_LIMIT 3 //Limite máximo de tentativas de retransmissão
 #define TIMEOUT_MS 2000 //Timeout para retransmitir
 
+/*
+A Classe SlowPacket faz uma abstração do segmento Slow,
+para que ele possa ser interpretado e manipulado facilmente como um objeto.
 
+Para ser transmitido o objeto deve ser transformado em vetor de bytes usando o método build.
 
+Um vetor de bytes pode ser transformado de volta em objeto para interpretação e manipulação mais fácil,
+utilizando o método parse.
+*/
 class SlowPacket {
 public:
 
@@ -69,21 +97,23 @@ public:
 
     // --- Interface Pública ---
 
-    //Valida o pacote
+    //Valida se o segmento obedece as restrições das especificações
     void validate() {
         if (sid.size() != 16)
             std::cout << "SID deve ser exatamente 16 bytes";
         if (sttl > 0x07FFFFFF)
-            std::cout << "STTL must fit in 27 bits";
-        if (data.size() > 1440)
-            std::cout << "Payload must be <= 1440 bytes";
+            std::cout << "STTL deve caber em 27 bits";
+        if (data.size() > MAX_DATA_SIZE)
+            std::cout << "Payload deve ser menor ou igual que" << MAX_DATA_SIZE << "bytes";
     }
 
-    //Converte o pacote para vetor de bytes para serem enviados
+    //Converte o segmento em um vetor de bytes para que possa ser transmitido
     std::vector<uint8_t> build() {
-        validate();
-        std::vector<uint8_t> buf;
-        buf.reserve(16 + 4 + 4 + 4 + 2 + 1 + 1 + data.size());
+        validate(); //valida o segmento
+        std::vector<uint8_t> buf; //Buffer que guardará a versão serializada do segmento
+        buf.reserve(16 + 4 + 4 + 4 + 2 + 1 + 1 + data.size()); //reserva o espaço no buffer
+
+        //Insere todos os dados no buffer
 
         insertBytes(buf, sid);
         insertUint32(buf, buildFlagsAndSttl());
@@ -94,10 +124,11 @@ public:
         buf.push_back(fo);
         insertBytes(buf, data);
 
+        //Retorna o buffer
         return buf;
     }
 
-    //Imprime o pacote para depuração
+    //Imprime o segmento para depuração
     void print() {
         uint32_t sf_combined = buildFlagsAndSttl();
         std::bitset<32> bits(sf_combined);
@@ -129,38 +160,41 @@ public:
         }
     }
 
-    //Transforma um vetor de bytes em um novo pacote
+    //Recebe um segmento serializado em um vetor de bytes em retorna um objeto pacote com as informações do segmento serializado
     static SlowPacket parse(const std::vector<uint8_t>& buf) {
-        size_t HEADER = 16 + 4 + 4 + 4 + 2 + 1 + 1;
-        if (buf.size() < HEADER)
-            std::cout << "Buffer too small for SLOW packet";
+        
+        size_t HEADER = 16 + 4 + 4 + 4 + 2 + 1 + 1; //Calcula o tamanho do header
+        if (buf.size() < HEADER) //Segmento não pode ser menor que o header
+            std::cout << "Buffer muito pequeno para um segmento SLOW";
 
-        // SID
+        // Lê o SID do segmento serializado
         std::vector<uint8_t> sid(buf.begin(), buf.begin() + 16);
 
-        // STTL + flags
+        // Lê o STTL e as flags
         uint32_t sf    = readU32(buf, 16);
         uint8_t  flags = sf & 0x1F;
         uint32_t sttl_ = sf >> 5;
 
+        // Interpreta as flags
         bool m  = flags & 0x01;
         bool ac  = flags & 0x02;
         bool a  = flags & 0x04;
         bool r = flags & 0x08;
         bool c  = flags & 0x10;
 
-        // Seq e Ack
+        // Lê o Seq e Ack
         uint32_t seq   = readU32(buf, 20);
         uint32_t ack   = readU32(buf, 24);
 
-        // Window, fid, fo
+        // Lê o Window, fid, fo
         uint16_t win = readU16(buf, 28);
         uint8_t  fid_ = buf[30];
         uint8_t  fo_  = buf[31];
 
-        // Payload
+        // Lê o Payload
         std::vector<uint8_t> payload(buf.begin() + 32, buf.end());
 
+        // Constroi e retorna um segmento Slow em forma de objeto com os dados lidos do buffer
         return SlowPacket(sid, sttl_, c, r, a, ac, m, seq, ack, win, fid_, fo_, payload);
     }
 
@@ -217,6 +251,10 @@ private:
     }
 };
 
+/*
+Essa classe é um wrapper do socket que cria uma sintaxe mais simples 
+e limitada as necessidades de uma conexão SLOW, simplificando o desenvolvimento do Slow Connection.
+*/
 class UdpSocket{
 public:
     // --- Dados da classe ---
@@ -265,11 +303,13 @@ public:
         return sent;
     }
 
+    //Recebe um vetor de bytes qualquer que chege no socket
     std::vector<uint8_t> receive(size_t max_length = 1500){
         if(max_length == 0){
             std::cout << "Tamanho máximo inválido";
         }
         
+        //Cria o buffer
         std::vector<uint8_t> buffer(max_length);
 
         sockaddr_in src{};
@@ -282,14 +322,16 @@ public:
             return {};
         }
 
+        //Redimensiona o buffer para apenas o tamanho necessário
         buffer.resize(static_cast<size_t>(received));
 
         return buffer;
     }
 
+    // Configura um timeout de recebimento no socket
     void setReceiveTimeout(int milliseconds){
         if (milliseconds < 0) {
-            std::cout << "Timeout must be non-negative";
+            std::cout << "Timeout não pode ser negativo";
         }
         timeval tv{};
         tv.tv_sec  = milliseconds / 1000;
@@ -316,7 +358,7 @@ private:
 
         if (::inet_pton(AF_INET, local_ip.c_str(), &local_addr.sin_addr) != 1) {
             ::close(socket_fd);
-            std::cout << "inet_pton() failed for local IP";
+            std::cout << "inet_pton() falhou para o IP local";
         }
     }
 
@@ -333,13 +375,16 @@ private:
 
         if (::inet_pton(AF_INET, remote_ip.c_str(), &remote_addr.sin_addr) != 1) {
             ::close(socket_fd);
-            std::cout << "inet_pton() failed for remote IP";
+            std::cout << "inet_pton() falhou para o IP remoto";
         }
     }
 };
 
+/*
+CLASSE PRINCIPAL DO TRABALHO
+Essa classe gerencia uma conexão slow com métodos para tudo o que se possa fazer em uma conexão SLOW.
+*/
 class SlowConnection{
-
 private:
 
     // --- Auxiliares para a construção de pacotes ---
@@ -357,20 +402,21 @@ private:
     }
 
     //Cria um pacote de dados
-    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag, bool revive_flag){
+    SlowPacket pktData(const std::vector<uint8_t>& data_chunk, uint8_t fid, uint8_t fo, bool more_flag = false, bool revive_flag = false){
         SlowPacket data_pkt(sid, sttl, false, revive_flag, true, false, more_flag, next_seqnum, last_acknum, 1440, fid, fo, data_chunk);
         return data_pkt;
     }
 
     // --- Auxiliares para operações ---
 
-    //Recebe um pacote e salva os dados no pacote passado por parametro
+    //Recebe um pacote e salva os dados no objeto pacote passado por parametro
     bool receivePacket(SlowPacket& pkt) {
         std::vector<uint8_t> raw_data = socket.receive();
         if (raw_data.empty()) {
             std::cout << "Nenhum dado recebido";
             return false;
         }
+
         pkt = SlowPacket::parse(raw_data);
         return true;
     }
@@ -461,87 +507,136 @@ public:
             }
         }
 
+        //Se chegar aqui o limite de tentativas foi excedido e a conexão falhou
         return false;
     }
 
     //Desconectar
     bool disconnect(){
+
+        //Já foi desconectado
         if(!session_active){
             return true;
         }
         
+        //Constroi e envia um segmento de desconexão
         SlowPacket disc_pkt = pktDisconnect();
         socket.send(disc_pkt.build());
 
+        //Recebeu uma resposta, confirmando a desconexão
         SlowPacket response;
         if(receivePacket(response)){
 
         }
         session_active = false;
         return true;
-
     }
 
     //Enviar uma mensagem que pode ser dividida em diversos fragmentos
-    bool sendData(const std::vector<uint8_t>& message, bool revive = false) {
-        if(!(session_active) && revive == false){
+    bool sendData(const std::vector<uint8_t>& message) {
 
-            std::cout << "Sessão não está ativa. Conecte primeiro ou tente reviver.";
+        //Verifica se a sessão está ativa, possibilitando o envio de dados
+        if (!session_active) {
+            std::cout << "Sessão não está ativa. Conecte primeiro.";
             return false;
         }
 
-        uint8_t fid = 0; // ID do fragmento de dados
-        uint8_t fo = 0;  // Offset do fragmento de dados
+        //Struct necessária para gerenciar a janela deslizante
+        struct Pending {
+            uint32_t seqnum;
+            uint8_t  fid, fo;
+            size_t   offset, length;
+            bool     more;
+        };
+
+        //Dados necessários para gerenciar o envio
+        std::vector<Pending> pending;
         size_t total = message.size();
         size_t offset = 0;
+        uint8_t fid = 0, fo = 0;
+        uint32_t bytes_in_flight = 0;
 
-        while(offset < total){
+        // Loop até enviar todos os dados E todos os segmentos serem reconhecidos
+        while (offset < total || !pending.empty()) {
 
-            //WIP - IMPLEMENTAR JANELA DESLIZANTE
+            //Preenche a janela enviando os novos segmentos
+            while (offset < total && bytes_in_flight < peer_window) {
 
-            size_t chunk_size = std::min(static_cast<size_t>(MAX_DATA_SIZE), total - offset);
-            bool more_flag = ((offset + chunk_size) < total);
+                //Fragmenta os dados
+                size_t chunk_size = std::min<size_t>(MAX_DATA_SIZE, total - offset);
 
-            std::vector<uint8_t> payload(message.begin() + offset, message.begin() + offset + chunk_size);
+                // Respeita a janela do Central
+                if (bytes_in_flight + chunk_size > peer_window) {
+                    chunk_size = peer_window - bytes_in_flight;
+                    if (chunk_size == 0) break;
+                }
+                bool more_flag = (offset + chunk_size < total);
 
-            bool fragment_sent = false;
-            for(int attempt = 0; attempt < RETRY_LIMIT && !fragment_sent; attempt++){
-                SlowPacket data_pkt = pktData(payload, fid, fo, more_flag, revive);
-                socket.send(data_pkt.build());
-                std::cout << "DATA ENVIADO" << std::endl;
+                // Serializa e envia
+                std::vector<uint8_t> chunk(
+                    message.begin() + offset,
+                    message.begin() + offset + chunk_size
+                );
+                SlowPacket pkt = pktData(chunk, fid, fo, more_flag);
+                socket.send(pkt.build());
 
-                //Espera pelo Ack
-                SlowPacket ack_pkt;
-                if(receivePacket(ack_pkt)){
+                // Debugging
+                //std::cout << "Enviando Pacote";
 
-                    //debugging
-                    std::cout << "ACK RECEBIDO" << std::endl;
+                // Buffer para a retransmissão se necessário
+                pending.push_back({pkt.seqnum, fid, fo, offset, chunk_size, more_flag});
+                bytes_in_flight += chunk_size;
+                offset += chunk_size;
+                ++fo;
+            }
 
+            //Aguarda o próximo ACK ou o timeout
+            SlowPacket ack_pkt;
+            if (receivePacket(ack_pkt) && ack_pkt.ack) { //Se receber o ACK
 
-                    if(ack_pkt.ack && ack_pkt.acknum == data_pkt.seqnum){
-                        next_seqnum++;
-                        last_acknum = ack_pkt.seqnum;
-                        peer_window = ack_pkt.window;
-                        fragment_sent = true;
-                        break;
+                // Debugging
+                //std::cout << "ACK RECEBIDO";
+
+                // Atualiza a janela e o ultimo acknum
+                peer_window = ack_pkt.window;
+                last_acknum = ack_pkt.acknum;
+
+                // Remove segmentos pendentes até acknum
+                uint32_t acked = ack_pkt.acknum;
+                size_t freed = 0;
+                auto it = pending.begin();
+                while (it != pending.end()) {
+                    if (it->seqnum <= acked) {
+                        freed += it->length;
+                        it = pending.erase(it);
+                    } else {
+                        ++it;
                     }
+                }
+                bytes_in_flight -= freed;
+            } else {
+                // Timeout ou ack inválido, logo retransmitir todos segmentos não reconhecidos
+                for (auto& p : pending) {
+                    std::vector<uint8_t> chunk(
+                        message.begin() + p.offset,
+                        message.begin() + p.offset + p.length
+                    );
+                    SlowPacket retry_pkt = pktData(chunk, p.fid, p.fo, p.more);
+                    socket.send(retry_pkt.build());
+
+                    // Debugging
+                    //std::cout << "Re-Enviando Pacote porque não recebeu ACK";
                 }
                 waitRetry();
             }
-
-            if(!fragment_sent)
-                return false;
-        
-            offset += chunk_size;
-            fo++;
         }
-        
+
         return true;
     }
 
 };
 
-// Converte uma string para um vetor de bytes a ser enviado
+// Converte uma string para um vetor de bytes a ser enviado, apenas facilita testes
 std::vector<uint8_t> stringToBytes(const std::string& str) {
     return std::vector<uint8_t>(str.begin(), str.end());
 }
@@ -557,43 +652,45 @@ std::vector<uint8_t> generateRandomData(size_t size) {
 
 //Main para testar a biblioteca
 int main() {
-    // Testing SlowConnection class and its methods with debug prints
+    // Testando a classe e seus métodos com prints de debug
 
-    std::cout << "Starting SLOW Protocol Testing..." << std::endl;
+    std::cout << "Iniciando testes do protocolo SLOW:" << std::endl;
 
-    // Step 1: Test connection
-    std::cout << "\n---- Test 1: Connect to Central ----" << std::endl;
+    // Conexão
+    std::cout << "\n---- TESTE 1: Conexão ----" << std::endl;
 
     SlowConnection conn("0.0.0.0", 7033, REMOTE_IP, PORTA);
     if (conn.connect()) {
-        std::cout << "[✓] Connection established successfully!" << std::endl;
+        std::cout << "Conexão estabelecida com sucesso" << std::endl;
     } else {
-        std::cout << "[✗] Connection failed!" << std::endl;
+        std::cout << "Conexão falhou!" << std::endl;
         return 1;
     }
 
-    // Step 2: Test sending small data
-    std::cout << "\n---- Test 2: Send data ----" << std::endl;
+    // Enviando dados
+    std::cout << "\n---- Teste 2: Envio de dados ----" << std::endl;
 
-    std::vector<uint8_t> message = generateRandomData(8000); //Dados alearórios para testes
+    //Aqui é gerado 12 mil bytes aleatórios de dados para testes
+    //A quantidade é para que eles não caibam em um único segmento e a fragmentação e janela deslizante entre em efeito
+    std::vector<uint8_t> message = generateRandomData(12000);
     if (conn.sendData(message)) {
-        std::cout << "[✓] Data sent successfully!" << std::endl;
+        std::cout << "Dados enviados com sucesso!" << std::endl;
     } else {
-        std::cout << "[✗] Data sending failed!" << std::endl;
+        std::cout << "Envio de dados falhou!" << std::endl;
         return 1;
     }
 
-    // Step 3: Test disconnecting from the server
-    std::cout << "\n---- Test 3: Disconnect from Central ----" << std::endl;
+    // Desconectando
+    std::cout << "\n---- Desconectando ----" << std::endl;
 
     try {
         conn.disconnect();
-        std::cout << "[✓] Disconnected successfully!" << std::endl;
+        std::cout << "Desconectado com sucesso!" << std::endl;
     } catch (const std::exception& e) {
-        std::cout << "[✗] Error during disconnect: " << e.what() << std::endl;
+        std::cout << "Dexconexão falhou" << std::endl;
         return 1;
     }
 
-    std::cout << "\nAll tests complete!" << std::endl;
+    std::cout << "\n Testes concluídos!" << std::endl;
     return 0;
 }
