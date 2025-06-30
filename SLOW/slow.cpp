@@ -436,7 +436,6 @@ public:
     uint32_t                last_acknum;
     uint16_t                peer_window;
     bool                    session_active;
-    bool                    revived;
 
     // --- Construtores e destrutores ---
     SlowConnection(const std::string& local_ip, uint16_t local_port, const std::string& remote_ip, uint16_t remote_port)
@@ -449,7 +448,6 @@ public:
         last_acknum = 0;
         peer_window = 0;
         session_active = false;
-        revived = false;
 
         socket.setReceiveTimeout(TIMEOUT_MS);
     }
@@ -480,7 +478,6 @@ public:
                     last_acknum = response.acknum;
                     peer_window = response.window;
                     session_active = true;
-                    revived = false;
                     break;
                 }
                 waitRetry();
@@ -535,10 +532,10 @@ public:
     //Enviar uma mensagem que pode ser dividida em diversos fragmentos
     bool sendData(const std::vector<uint8_t>& message) {
 
-        //Verifica se a sessão está ativa, possibilitando o envio de dados
+        //Se a sessão estiver inativa, tenta reviver
+        bool revive = false;
         if (!session_active) {
-            std::cout << "Sessão não está ativa. Conecte primeiro.";
-            return false;
+            revive = true;
         }
 
         //Struct necessária para gerenciar a janela deslizante
@@ -577,7 +574,7 @@ public:
                     message.begin() + offset,
                     message.begin() + offset + chunk_size
                 );
-                SlowPacket pkt = pktData(chunk, fid, fo, more_flag);
+                SlowPacket pkt = pktData(chunk, fid, fo, more_flag, revive);
                 socket.send(pkt.build());
 
                 // Debugging
@@ -657,7 +654,7 @@ int main() {
     std::cout << "Iniciando testes do protocolo SLOW:" << std::endl;
 
     // Conexão
-    std::cout << "\n---- TESTE 1: Conexão ----" << std::endl;
+    std::cout << "\n---- Conectando ----" << std::endl;
 
     SlowConnection conn("0.0.0.0", 7033, REMOTE_IP, PORTA);
     if (conn.connect()) {
@@ -668,7 +665,7 @@ int main() {
     }
 
     // Enviando dados
-    std::cout << "\n---- Teste 2: Envio de dados ----" << std::endl;
+    std::cout << "\n---- Enviando dados ----" << std::endl;
 
     //Aqui é gerado 12 mil bytes aleatórios de dados para testes
     //A quantidade é para que eles não caibam em um único segmento e a fragmentação e janela deslizante entre em efeito
@@ -688,6 +685,15 @@ int main() {
         std::cout << "Desconectado com sucesso!" << std::endl;
     } catch (const std::exception& e) {
         std::cout << "Dexconexão falhou" << std::endl;
+        return 1;
+    }
+
+    //Enviando dados depois de desconectar através do revive automático
+    std::cout << "\n---- Revivendo e enviando dados após desconexão ----" << std::endl;
+    if (conn.sendData(message)) {
+        std::cout << "Dados enviados com revive com sucesso!" << std::endl;
+    } else {
+        std::cout << "Envio de dados com revive falhou!" << std::endl;
         return 1;
     }
 
