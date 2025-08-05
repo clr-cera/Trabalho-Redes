@@ -1,3 +1,5 @@
+This repository stores two projects developed for [Computer Networks](https://uspdigital.usp.br/jupiterweb/obterDisciplina?sgldis=SSC0540&codcur=55051&codhab=4) discipline at [ICMC - USP](https://www.icmc.usp.br/).
+
 ## Project 1
 Under the Arduino folder you can find the files for the first project. 
 
